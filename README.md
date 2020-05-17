@@ -3,6 +3,8 @@
 Desktop volume change script (change volume &amp; display notification with
 current volume).
 
+![Notification screenshot](notification-screenshot.png)
+
 This is a lightweight script for changing and displaying the volume on your
 desktop. It uses the standard desktop notifications to display the volume, and
 if you invoke the script repeatedly it will replace the notification with the
