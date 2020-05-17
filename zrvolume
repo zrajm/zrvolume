@@ -1,0 +1,158 @@
+#!/bin/sh
+
+VERSION=0.1
+DATE="17 May 2020"
+TIMEOUT=10000
+TEMPFILE="/tmp/${0##*/}-$USER"
+
+################################################################################
+
+# dbus is documented here:
+# https://developer.gnome.org/notification-spec/#command-notify
+
+################################################################################
+##                                                                            ##
+##  Functions                                                                 ##
+##                                                                            ##
+################################################################################
+
+version() {
+    simplecat <<EOF
+${0##*/} $VERSION
+Copyright (C) ${DATE##* } zrajm <zrajm@klingonska.org>
+License GPLv2: GNU GPL version 2 <http://gnu.org/licenses/gpl-2.0.html>.
+This is free software: you are free to change and redistribute it.
+EOF
+}
+
+help() {
+    simplecat <<EOF
+Usage: ${0##*/} [OPTIONS] VOLUME...
+
+Options:
+  -h,--help          display this help and exit
+  -t,--timeout=MS    notification timeout in milliseconds (default: $TIMEOUT)
+  -V,--version       display version information and exit
+
+VOLUME is a parameter passed on to amixer's 'set' command. It can be either a
+percentage (e.g. '50%'), a dB gain value (if supported by the mixer, e.g.
+'-12.5dB') or an absolute hardware value (e.g. '64'). Use plus (+) or minus (-)
+after the value to increase or lower the current value (e.g. '10%+'). You can
+set left/right channels separately using comma (e.g. '50%,80%'). You can also
+use 'mute', 'unmute' and 'toggle'.
+
+The amixer command used is 'amixer -D pulse set Master VOLUME...', meaning that
+this script will only affect the 'Master' mixer, as defined by pulseaudio.
+EOF
+}
+
+# Substitute for 'cat' that doesn't require an external command.
+simplecat() {
+    while IFS='' read -r LINE; do
+        printf '%s\n' "$LINE"
+    done
+}
+
+# Monitor gdbus output, looking for: '/org/freedesktop/Notifications:
+# org.freedesktop.Notifications.NotificationClosed (uint32 1192, uint32 1)' on
+# a single line. '1192' in the example is replaced by the notification ID
+# number. This way we can detect the closing of the notification and clean up
+# the tempfile.
+cleanup_on_close() {
+    local ID="$1" TEMPFILE="$2"
+    echo "$ID" >"$TEMPFILE"
+    gdbus monitor --session --dest org.freedesktop.Notifications | \
+        while read -r LINE; do
+            # For each notification line.
+            case "$LINE" in *'.Notifications.'*)
+                # If it's a close event for our notification.
+                case "$LINE" in *".NotificationClosed (uint32 $ID,"*)
+                    rm -f "$TEMPFILE"
+                    kill "$!"
+                    break
+                esac
+                # For each notification we check if tempfile was erased or
+                # changed (by us, or by other process). With a very short
+                # TIMEOUT the gdbus process might hang around forever waiting a
+                # notification that it didn't catch (a race condidion). By
+                # checking for the tempfile and killing gdbus if it has
+                # disappeared or changed, our gdbus command will not hang
+                # around forever but die when any later notification is
+                # closed.
+                local NEWID=""
+                [ -e "$TEMPFILE" ] && read -r NEWID <"$TEMPFILE"
+                [ "$ID" != "$NEWID" ] && kill "$!"
+            esac
+        done &  # <-- NOTE! '&' here is important for '$!' to work above!
+}
+
+notify_volume() {
+    # ENABLED = on/off (=unmuted/muted)
+    local TEMPFILE="$1" VOLUME="$2" ENABLED="$3" TIMEOUT="$4"
+
+    local ID=0
+    [ -e "$TEMPFILE" ] && read -r ID <"$TEMPFILE"
+
+    local ICON='stock_volume-med' MUTED="unmuted"
+    if [ "$ENABLED" = "off" ]; then
+        ICON='stock_volume-mute'
+        MUTED="muted"
+    elif [ "$VOLUME" -le 33 ]; then
+        ICON='stock_volume-min'
+    elif [ "$VOLUME" -ge 66 ]; then
+        ICON='stock_volume-max'
+    fi
+    gdbus call --session --dest org.freedesktop.Notifications \
+          --object-path /org/freedesktop/Notifications \
+          --method org.freedesktop.Notifications.Notify \
+          "Volume" "$ID" "$ICON" "Volume" "Volume: $VOLUME% ($MUTED)" "[]" \
+          "{'transient':<1>,'value':<$VOLUME>}" "$TIMEOUT" | \
+        {
+            # Get notification ID from gdbus output '(uint32 43,)'.
+            IFS=' ' read _ NEWID; NEWID="${NEWID%,*}"
+            [ "$NEWID" != "$ID" ] && cleanup_on_close "$NEWID" "$TEMPFILE" <&-
+        }
+}
+
+################################################################################
+##                                                                            ##
+##  Parse Command Line Args                                                   ##
+##                                                                            ##
+################################################################################
+
+# Go through all args in $@.
+for ARG; do
+    shift
+    case "$ARG" in
+        -h|--help) help && exit ;;
+        -V|--version) version && exit ;;
+        --tempfile=*) TEMPFILE="${ARG#--*=}" ;;
+        --timeout=*) TIMEOUT="${ARG#--*=}" ;;
+        -t*) TIMEOUT="${ARG#-?}" ;;
+        -*) echo "Unknown option '$ARG'"; exit 5 ;;
+        *) set - "$@" "$ARG";;
+    esac
+done
+if [ "$#" -eq 0 ]; then
+    printf "%s\n" "${0##*/}: No VOLUME specified" \
+           "Try '${0##*/} --help' for more information." >&2
+    exit 2
+fi
+
+################################################################################
+##                                                                            ##
+##  Main                                                                      ##
+##                                                                            ##
+################################################################################
+
+# Run 'amixer' and parse the output from it.
+amixer -D pulse set Master "$*" | while read LINE; do
+    case "$LINE" in *': Playback '*' ['*'%] ['*']')
+        VOLUME="${LINE#*[}"; VOLUME="${VOLUME%%\%]*}"
+        ENABLED="${LINE##*[}"; ENABLED="${ENABLED%%]*}"
+        notify_volume "$TEMPFILE" "$VOLUME" "$ENABLED" "$TIMEOUT"
+        break # exit after first matching line
+    esac
+done
+
+#[eof]

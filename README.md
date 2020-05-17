@@ -1,2 +1,5 @@
 # zrvolume
-Desktop volume change script (change volume &amp; display notification with current volume)
+
+Desktop volume change script (change volume &amp; display notification with current volume).
+
+<!--[eof]-->
