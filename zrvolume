@@ -1,6 +1,6 @@
 #!/bin/sh
 
-VERSION=0.1
+VERSION=0.2
 DATE="17 May 2020"
 TIMEOUT=10000
 TEMPFILE="/tmp/${0##*/}-$USER"
@@ -46,6 +46,18 @@ this script will only affect the 'Master' mixer, as defined by pulseaudio.
 EOF
 }
 
+# Usage: readnum VARNAME FILE
+#
+# Read ID number from file, assign it to the variable named VARNAME. After
+# calling VARNAME is guaranteed to contain an integer. If read value contain
+# any non-digit, or if the file couldn't be read, it is silently to '0'.
+readnum() {
+    local VARNAME="$1" FILE="$2" NUM=0
+    { read -r NUM <"$FILE"; } 2>/dev/null   # atomic read (w/ quiet fail)
+    case "$NUM" in ''|*[!0-9]*) NUM=0; esac # set to '0' if not only digits
+    eval "$VARNAME=$NUM"
+}
+
 # Substitute for 'cat' that doesn't require an external command.
 simplecat() {
     while IFS='' read -r LINE; do
@@ -60,6 +72,7 @@ simplecat() {
 # the tempfile.
 cleanup_on_close() {
     local ID="$1" TEMPFILE="$2"
+    local NEWID=0
     echo "$ID" >"$TEMPFILE"
     gdbus monitor --session --dest org.freedesktop.Notifications | \
         while read -r LINE; do
@@ -79,8 +92,7 @@ cleanup_on_close() {
                 # disappeared or changed, our gdbus command will not hang
                 # around forever but die when any later notification is
                 # closed.
-                local NEWID=""
-                [ -e "$TEMPFILE" ] && read -r NEWID <"$TEMPFILE"
+                readnum NEWID "$TEMPFILE"
                 [ "$ID" != "$NEWID" ] && kill "$!"
             esac
         done &  # <-- NOTE! '&' here is important for '$!' to work above!
@@ -91,7 +103,7 @@ notify_volume() {
     local TEMPFILE="$1" VOLUME="$2" ENABLED="$3" TIMEOUT="$4"
 
     local ID=0
-    [ -e "$TEMPFILE" ] && read -r ID <"$TEMPFILE"
+    readnum ID "$TEMPFILE"
 
     local ICON='stock_volume-med' MUTED="unmuted"
     if [ "$ENABLED" = "off" ]; then
