@@ -1,9 +1,9 @@
 #!/bin/sh
 
-VERSION=0.2
-DATE="17 May 2020"
+VERSION=0.3
+DATE="18 May 2020"
 TIMEOUT=10000
-TEMPFILE="/tmp/${0##*/}-$USER"
+TEMPFILEBASE="/tmp/${0##*/}-$USER"
 
 ################################################################################
 
@@ -158,12 +158,15 @@ fi
 ################################################################################
 
 # Run 'amixer' and parse the output from it.
+I=1
 amixer -D pulse set Master "$*" | while read LINE; do
+    # Display each matching volume control in separate notification.
+    # (Numbered by the order they're outputted by amixer.)
     case "$LINE" in *': Playback '*' ['*'%] ['*']')
         VOLUME="${LINE#*[}"; VOLUME="${VOLUME%%\%]*}"
         ENABLED="${LINE##*[}"; ENABLED="${ENABLED%%]*}"
-        notify_volume "$TEMPFILE" "$VOLUME" "$ENABLED" "$TIMEOUT"
-        break # exit after first matching line
+        notify_volume "$TEMPFILEBASE-$I" "$VOLUME" "$ENABLED" "$TIMEOUT"
+        I="$((I+1))"
     esac
 done
 
